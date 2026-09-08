@@ -20,8 +20,22 @@ const int kMaxBrightness = 7;
 const String kTorchDevice =
     '/sys/devices/platform/flashlights_mt6360/torchbrightness';
 
-// The `su` binary used to escalate privileges.
-const String kSuBinary = '/bin/su';
+// Candidates for the `su` binary, probed in order at runtime.
+//
+// On Android there is no /bin, so /bin/su never exists — the previous hard
+// coded /bin/su failed with "No such file or directory" before root was ever
+// attempted. /system/bin/su is the standard location (Magisk, KernelSU,
+// APatch/FolkPatch hook execve of it via kernel "sucompat", which is how apps
+// without direct /data/adb access reach root). The others cover alternative
+// setups (e.g. /data/adb/ap/bin/su for APatch/FolkPatch when readable).
+const List<String> kSuCandidates = <String>[
+  '/system/bin/su',
+  '/system/xbin/su',
+  '/su/bin/su',
+  '/data/adb/ap/bin/su',
+  '/sbin/su',
+  '/magisk/.core/bin/su',
+];
 
 // Visual palette (dark, minimalistic).
 const Color _kBackground = Color(0xFF0D0F13);
@@ -92,7 +106,12 @@ class _TorchHomePageState extends State<TorchHomePage> {
   bool _busy = false;
   String? _status;
 
-  /// Run: /bin/su -c 'echo "N" > /sys/devices/platform/flashlights_mt6360/torchbrightness'
+  /// Writes the current brightness level to the torch device as root.
+  ///
+  /// Probes the known `su` locations and escalates with the first one that
+  /// exists, then runs:
+  ///
+  ///     su -c 'echo "N" > /sys/devices/platform/flashlights_mt6360/torchbrightness'
   Future<void> _writeDevice() async {
     if (_busy) {
       return;
@@ -102,17 +121,24 @@ class _TorchHomePageState extends State<TorchHomePage> {
     setState(() {});
     try {
       final String command = 'echo "$_value" > "$kTorchDevice"';
-      final ProcessResult result = await Process.run(
-        kSuBinary,
-        <String>['-c', command],
-        runInShell: false,
-      );
-      if (result.exitCode == 0) {
-        _root = true;
-        _status = 'Brightness set to $_value';
-      } else {
+      final String? suPath = await _resolveSuPath();
+      if (suPath == null) {
         _root = false;
-        _status = 'Need root: su exited ${result.exitCode}';
+        _status = 'No su binary found — root not granted?';
+      } else {
+        final ProcessResult result = await Process.run(
+          suPath,
+          <String>['-c', command],
+          runInShell: false,
+        );
+        if (result.exitCode == 0) {
+          _root = true;
+          _status = 'Brightness set to $_value';
+        } else {
+          _root = false;
+          _status =
+              'su exited ${result.exitCode} — root denied? ${result.stderr}';
+        }
       }
     } on ProcessException catch (e) {
       _root = false;
@@ -123,6 +149,25 @@ class _TorchHomePageState extends State<TorchHomePage> {
     }
     _busy = false;
     setState(() {});
+  }
+
+  /// Returns the first existing `su` binary path, or null if none is found.
+  Future<String?> _resolveSuPath() async {
+    for (final String candidate in kSuCandidates) {
+      try {
+        final ProcessResult check = await Process.run(
+          candidate,
+          const <String>['--version'],
+          runInShell: false,
+        );
+        if (check.exitCode != 127) {
+          return candidate;
+        }
+      } on ProcessException {
+        // Not present (or not executable) at this path — try the next one.
+      }
+    }
+    return null;
   }
 
   void _apply(Offset position) {
