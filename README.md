@@ -17,6 +17,19 @@ On APatch-family roots (APatch, FolkPatch) the kernel's sucompat layer
 intercepts execve of `/system/bin/su`, so the first candidate normally
 answers even though the real binary lives under `/data/adb/ap/bin`.
 
+## Quick Settings tile
+
+`TorchTileService` (Kotlin, `android/app/src/main/kotlin/`) adds a
+"Torch" tile that toggles brightness 0 ↔ 7 with a single tap:
+
+- Resolves `su` with the same probe order as the Dart side.
+- Writes on a worker thread; never blocks the main thread on root calls.
+- State syncs from the sysfs node when the panel opens, with a
+  SharedPreferences fallback (the app can't usually read the node directly).
+
+Add it from the QS editor (drag the "Torch" tile into the panel). Requires
+the same root grant as the app.
+
 ## Requirements
 
 - A rooted Android device (Magisk / KernelSU / APatch / FolkPatch) with the

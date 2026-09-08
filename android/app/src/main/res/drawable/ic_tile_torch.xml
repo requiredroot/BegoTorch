@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Quick Settings tile icon: 24dp square, monochrome (white + alpha only);
+     the system applies its own tint. The lens is a cut-out (evenOdd). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M8,2 L16,2 L16,4 L13.5,8 L13.5,22 L10.5,22 L10.5,8 L8,4 Z M12,4.6 A1.2,1.2 0 1,0 12,7 A1.2,1.2 0 1,0 12,4.6 Z" />
+</vector>
