@@ -11,6 +11,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // Brightness range (0..7 inclusive) => 8 stops on the dial.
 const int kMinBrightness = 0;
@@ -65,14 +66,52 @@ int valueAtAngle(double angle) {
     a += 2 * math.pi;
   }
   final int idx = (a / (2 * math.pi) * (kStops - 1)).round();
-  return kMinBrightness + (idx < 0
-      ? 0
-      : (idx > kStops - 1 ? kStops - 1 : idx));
+  return kMinBrightness + (idx < 0 ? 0 : (idx > kStops - 1 ? kStops - 1 : idx));
 }
 
 /// Angle (radians) corresponding to the given brightness [value].
 double angleForValue(int value) =>
     -math.pi / 2 + (value - kMinBrightness) * (2 * math.pi / kStops);
+
+// --- Settings / icon chooser -------------------------------------------------
+
+/// Preference key for the user's chosen launcher icon.
+const String kPrefIcon = 'chosen_icon';
+
+/// A selectable icon variant. Each variant provides a Flutter [IconData]
+/// for use in-app and an Android resource name fallback.
+class TorchIcon {
+  const TorchIcon({
+    required this.id,
+    required this.iconData,
+    required this.label,
+    this.androidResName,
+  });
+
+  final String id;
+  final IconData iconData;
+  final String label;
+  final String? androidResName;
+}
+
+/// Built-in icon variants the user can choose from. The default is the
+/// classic torch (flash) icon; the others are thematic variants.
+const List<TorchIcon> kTorchIcons = <TorchIcon>[
+  TorchIcon(id: 'torch', iconData: Icons.flash_on, label: 'Torch'),
+  TorchIcon(id: 'star', iconData: Icons.star, label: 'Star'),
+  TorchIcon(id: 'moon', iconData: Icons.nightlight, label: 'Moon'),
+  TorchIcon(id: 'sun', iconData: Icons.wb_sunny, label: 'Sun'),
+];
+
+/// Returns the icon variant currently selected by the user, defaulting to
+/// the first entry (`torch`) when nothing has been persisted yet.
+///
+/// On Android, changing the launcher icon needs a manifest-level
+/// `android:icon` change. This in-app choice is the source of truth that a
+/// follow-up can use (for example by adding `android:icon`-backed aliases
+/// in the manifest or by mirroring the selection in [TorchTileService]).
+TorchIcon iconForId(String id) =>
+    kTorchIcons.firstWhere((i) => i.id == id, orElse: () => kTorchIcons.first);
 
 class BegoTorchApp extends StatelessWidget {
   const BegoTorchApp({super.key});
@@ -89,6 +128,9 @@ class BegoTorchApp extends StatelessWidget {
       ),
       themeMode: ThemeMode.dark,
       home: const TorchHomePage(),
+      routes: <String, WidgetBuilder>{
+        '/settings': (BuildContext context) => const TorchSettingsPage(),
+      },
     );
   }
 }
@@ -105,6 +147,25 @@ class _TorchHomePageState extends State<TorchHomePage> {
   bool _root = false;
   bool _busy = false;
   String? _status;
+  TorchIcon _icon = kTorchIcons.first;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadIcon();
+  }
+
+  /// Loads the icon variant currently selected in settings, so the status
+  /// area reflects the choice made in [TorchSettingsPage].
+  Future<void> _loadIcon() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _icon = iconForId(prefs.getString(kPrefIcon) ?? kTorchIcons.first.id);
+    });
+  }
 
   /// Writes the current brightness level to the torch device as root.
   ///
@@ -126,11 +187,10 @@ class _TorchHomePageState extends State<TorchHomePage> {
         _root = false;
         _status = 'No su binary found — root not granted?';
       } else {
-        final ProcessResult result = await Process.run(
-          suPath,
-          <String>['-c', command],
-          runInShell: false,
-        );
+        final ProcessResult result = await Process.run(suPath, <String>[
+          '-c',
+          command,
+        ], runInShell: false);
         if (result.exitCode == 0) {
           _root = true;
           _status = 'Brightness set to $_value';
@@ -155,11 +215,9 @@ class _TorchHomePageState extends State<TorchHomePage> {
   Future<String?> _resolveSuPath() async {
     for (final String candidate in kSuCandidates) {
       try {
-        final ProcessResult check = await Process.run(
-          candidate,
-          const <String>['--version'],
-          runInShell: false,
-        );
+        final ProcessResult check = await Process.run(candidate, const <String>[
+          '--version',
+        ], runInShell: false);
         if (check.exitCode != 127) {
           return candidate;
         }
@@ -211,7 +269,22 @@ class _TorchHomePageState extends State<TorchHomePage> {
     final ThemeData theme = Theme.of(context);
     return Scaffold(
       backgroundColor: _kBackground,
-      appBar: AppBar(title: const Text('BegoTorch')),
+      appBar: AppBar(
+        title: const Text('BegoTorch'),
+        actions: <Widget>[
+          IconButton(
+            tooltip: 'Settings',
+            icon: const Icon(Icons.settings),
+            onPressed: () {
+              Navigator.of(context).pushNamed('/settings').then((_) {
+                // The user may have changed the icon in settings; reload it
+                // when returning to the home screen.
+                _loadIcon();
+              });
+            },
+          ),
+        ],
+      ),
       body: Center(
         child: SizedBox(
           width: 320,
@@ -220,7 +293,14 @@ class _TorchHomePageState extends State<TorchHomePage> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.center,
             children: <Widget>[
-              Text('Torch', style: theme.textTheme.titleLarge!),
+              Icon(
+                _icon.iconData,
+                key: const ValueKey<String>('home_icon'),
+                size: 28,
+                color: _kAccent,
+              ),
+              const SizedBox(height: 6),
+              Text(_icon.label, style: theme.textTheme.titleLarge!),
               const SizedBox(height: 8),
               _buildStatusLine(theme),
               const SizedBox(height: 26),
@@ -229,6 +309,7 @@ class _TorchHomePageState extends State<TorchHomePage> {
                 onTapDown: _handleTap,
                 onPanUpdate: _handleDrag,
                 child: CustomPaint(
+                  key: const ValueKey<String>('torch_dial'),
                   size: const Size(kDialSize, kDialSize),
                   painter: _DialPainter(value: _value),
                 ),
@@ -255,8 +336,7 @@ class _DialPainter extends CustomPainter {
   const _DialPainter({required this.value});
 
   @override
-  bool shouldRepaint(_DialPainter oldDelegate) =>
-      oldDelegate.value != value;
+  bool shouldRepaint(_DialPainter oldDelegate) => oldDelegate.value != value;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -309,9 +389,143 @@ class _DialPainter extends CustomPainter {
 
     // Hub.
     canvas.drawCircle(center, 36, Paint()..color = _kHub);
-    canvas.drawCircle(center, 36, Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..color = _kHubBorder);
+    canvas.drawCircle(
+      center,
+      36,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..color = _kHubBorder,
+    );
   }
 }
+
+// --- Settings page with icon chooser ----------------------------------------
+
+/// Settings screen offering an icon-chooser for the app launcher icon.
+///
+/// On Android the launcher icon is declared in AndroidManifest.xml and cannot
+/// be changed at runtime by a non-root app.  What *can* change at runtime is:
+///   - the Quick Settings tile icon (set in [TorchTileService])
+///   - which icon asset the Flutter UI itself renders
+///
+/// This page persists the user's choice via SharedPreferences so both the
+/// tile and the in-app display stay in sync.  The preference defaults to the
+/// classic torch icon (`'torch'`).
+class TorchSettingsPage extends StatefulWidget {
+  const TorchSettingsPage({super.key});
+
+  @override
+  State<TorchSettingsPage> createState() => _TorchSettingsPageState();
+}
+
+class _TorchSettingsPageState extends State<TorchSettingsPage> {
+  String _selectedId = kTorchIcons.first.id;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSelected();
+  }
+
+  Future<void> _loadSelected() async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _selectedId = prefs.getString(kPrefIcon) ?? kTorchIcons.first.id;
+    });
+  }
+
+  Future<void> _select(String id) async {
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+    await prefs.setString(kPrefIcon, id);
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _selectedId = id;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+    return Scaffold(
+      backgroundColor: _kBackground,
+      appBar: AppBar(title: const Text('Settings')),
+      body: ListView(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        children: <Widget>[
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            child: Text('Launcher Icon', style: theme.textTheme.titleMedium),
+          ),
+          _appDivider,
+          RadioGroup<String>(
+            groupValue: _selectedId,
+            onChanged: (String? v) {
+              if (v != null) {
+                _select(v);
+              }
+            },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                for (final TorchIcon icon in kTorchIcons)
+                  RadioListTile<String>(
+                    key: ValueKey<String>('icon_option_${icon.id}'),
+                    value: icon.id,
+                    activeColor: _kAccent,
+                    secondary: Icon(icon.iconData, color: _kAccent),
+                    title: Text(icon.label, style: theme.textTheme.bodyLarge),
+                    subtitle: _selectedId == icon.id
+                        ? Text(
+                            'Selected',
+                            style: theme.textTheme.bodySmall!.apply(
+                              color: _kAccent,
+                            ),
+                          )
+                        : null,
+                    // Highlight the selected item's background for visual clarity.
+                    selected: _selectedId == icon.id,
+                    selectedTileColor: _kRing.withValues(alpha: 0.3),
+                  ),
+              ],
+            ),
+          ),
+          _appDivider,
+          const SizedBox(height: 24),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+            child: Text('About', style: theme.textTheme.titleMedium),
+          ),
+          _appDivider,
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('App version'),
+            subtitle: const Text('1.0.0+1'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.favorite),
+            title: const Text('Icon source'),
+            subtitle: const Text(
+              'Arch Linux glyph — archlinux.org/art/ (trademark policy)',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A thin divider matching the app's muted palette, used inside ListViews
+/// to group settings sections.
+const Divider _appDivider = Divider(
+  height: 1,
+  thickness: 1,
+  indent: 24,
+  endIndent: 24,
+  color: _kRing,
+);
