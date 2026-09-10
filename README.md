@@ -1,6 +1,6 @@
 # BegoTorch
 
-Torch brightness control app for begonia (Xiaomi Mi 9T / Redmi K20).
+Torch brightness control app for begonia (Redmi Note 8 Pro).
 
 ## What it does
 
